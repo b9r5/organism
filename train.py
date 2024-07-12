@@ -1,50 +1,108 @@
 import torch
-from torch.utils.data import Dataset
-import pandas as pd
+import torch.nn as nn
+from torch.nn import functional as F
+
+with open('data/shuffled_organism_names.txt', 'r') as f:
+    text = f.read()
+
+chars = sorted(list(set(text)))
+
+if '>' in chars:
+    print('sorry, input text contains >, which will be used for a start-of-text marker')
+    exit(1)
+if '~' in chars:
+    print('sorry, input text contains ~, which will be used for an end-of-text marker')
+    exit(1)
+
+chars.remove('\n')
+chars.append('>') # prompt character at beginning of names
+chars.append('~') # padding character at end of names
+print(chars)
+vocab_size = len(chars)
+
+stoi = { ch:i for i,ch in enumerate(chars) }
+itos = { i:ch for i,ch in enumerate(chars) }
+encode = lambda s: [stoi[c] for c in s]
+decode = lambda l: ''.join([itos[i] for i in l])
+
+print(encode('Onitis coxalis'))
+print(decode(encode('Onitis coxalis')))
+
+with open('data/shuffled_organism_names.txt', 'r') as f:
+    data = f.readlines()
+
+max_length = max(len(line) for line in data)
+
+for i, line in enumerate(data):
+    line = line.strip()
+    #print(f'{i} {line}')
+    data[i] = torch.tensor(encode(f'>{line}' + ('_' * (1 + max_length - len(line)))))
+    #print(data[i])
 
 # split into train and validation sets
-#n = int(0.9 * len(lines))
-#train_data = data[:n]
-#val_data = data[n:]
+n = int(0.9 * len(data))
+train_data = data[:n]
+val_data = data[n:]
 
-class DinosaurDataset(Dataset):
-    def __init__(self, csv_file):
-        self.dinosaur_names = pd.read_csv(csv_file, header=None)
-        self.max_x_length = self.dinosaur_names.iloc[:, 0].str.len().max()
+torch.manual_seed(1337)
+batch_size = 4
+block_size = 1 + max_length
 
-        chars = set()
-        for col in self.dinosaur_names.columns:
-            for s in self.dinosaur_names[col]:
-                for char in s:
-                    chars.update(char)
-        self.chars = sorted(list(chars))
-        #print(self.chars)
+def get_batch(split):
+    # generate a small batch of data of inputs x and targets y
+    data = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data), (batch_size,))
+    x = torch.stack([data[i][:block_size-1] for i in ix])
+    y = torch.stack([data[i][1:block_size] for i in ix])
+    return x, y
 
-        self.char_to_idx = {char: idx for idx, char in enumerate(chars)}
-        self.idx_to_char = {idx: char for idx, char in enumerate(chars)}
+xb, yb = get_batch('train')
 
-    def __len__(self):
-        return len(self.dinosaur_names)
+print('inputs:')
+print(xb.shape)
+print(xb)
+print('targets:')
+print(yb.shape)
+print(yb)
 
-    def __getitem__(self, idx):
-        row = self.dinosaur_names.iloc[idx]
-        x = torch.tensor(self.__encode__(row[0]))
-        y = torch.tensor(self.char_to_idx[row[1][0]])
-        return x, y
+class BigramLanguageModel(nn.Module):
+    def __init__(self, vocab_size):
+        super().__init__()
+        # each token directly reads off the logits for the next token from a lookup table
+        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
 
-    def __encode__(self, str):
-        prefix = [self.char_to_idx[char] for char in str]
-        return prefix + ([-1] * (self.max_x_length - len(prefix)))
+    def forward(self, idx, targets=None):
+        # idx and targets are both (B,T) tensor of integers
+        logits = self.token_embedding_table(idx) # (B,T,C)
 
-    def __decode__(self, tensor):
-        if tensor.dim() == 0:
-            return self.idx_to_char[tensor.item()]
+        if targets is None:
+            loss = None
         else:
-            return ''.join(['' if idx == -1 else self.idx_to_char[idx] for idx in tensor.tolist()])
+            B, T, C = logits.shape
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
 
-dinosaur_dataset = DinosaurDataset(csv_file='data/dinosaurs_for_training.csv')
+        return logits, loss
 
-item4 = dinosaur_dataset.__getitem__(4)
-print(item4)
-print(dinosaur_dataset.__decode__(item4[0])) # Aardo
-print(dinosaur_dataset.__decode__(item4[1])) # n
+    def generate(self, idx, max_new_tokens):
+        # idx is (B,T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # get the predictions
+            logits, loss = self(idx)
+            # focus on only the last time step
+            logits = logits[:, -1, :] # becomes (B, C)
+            # apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1) # (B, C)
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
+            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
+        return idx
+
+m = BigramLanguageModel(vocab_size)
+logits, loss = m(xb, yb)
+print(logits.shape)
+print(loss)
+
+print(decode(m.generate(torch.full((1, 1), stoi['>']), max_new_tokens=max_length)[0].tolist()))
+
