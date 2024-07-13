@@ -136,7 +136,7 @@ def estimate_loss():
     model.train()
     return out
 
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel()
 if device is not None:
     model = model.to(device)
 
