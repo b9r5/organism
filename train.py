@@ -1,15 +1,20 @@
 import os.path
 import torch
-from bigram import BigramModel
+
+import bigram
+from gpt import GPTModel
 
 # hyperparameters
 batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
-max_iters = 3000
-eval_interval = 300
-learning_rate = 1e-2
+max_iters = 5000
+eval_interval = 500
+learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
+n_embd = 384
+n_head=6
+n_layer=6
+dropout = 0.2
 train_split = 0.9
 # ------------
 
@@ -75,23 +80,23 @@ else:
 data_file = 'data/organism_names.pt'
 if os.path.exists(data_file):
     print(f"loading {data_file}...")
-    data0 = torch.load(data_file)
+    data = torch.load(data_file)
     print('done')
 else:
     print(f"loading {organism_names_file} to create {data_file}...")
     with open(organism_names_file, 'r') as f:
         lines = f.readlines()
-    data0 = torch.empty(len(lines), max_length + 2, dtype=torch.int64)
+    data = torch.empty(len(lines), max_length + 2, dtype=torch.int64)
     for i, line in enumerate(lines):
         line = line.strip()
-        data0[i] = torch.tensor(encode(f'>{line}' + ('~' * (1 + max_length - len(line)))), dtype=torch.int64)
-    torch.save(data0, data_file)
+        data[i] = torch.tensor(encode(f'>{line}' + ('~' * (1 + max_length - len(line)))), dtype=torch.int64)
+    torch.save(data, data_file)
     print('done')
 
 # train and test splits
-n = int(train_split * len(data0))
-train_data = data0[:n]
-val_data = data0[n:]
+n = int(train_split * len(data))
+train_data = data[:n]
+val_data = data[n:]
 
 block_size = 1 + max_length
 
@@ -119,7 +124,9 @@ def estimate_loss():
     model.train()
     return out
 
-model = BigramModel(vocab_size)
+# was: model = bigram.BigramModel(vocab_size)
+model = GPTModel(vocab_size=vocab_size, block_size=block_size, n_embd=n_embd, n_head=n_head, n_layer=n_layer,
+                 dropout=dropout, device=device)
 model = model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -142,5 +149,11 @@ for iter in range(max_iters):
     optimizer.step()
 
 # generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(model.generate(context, max_new_tokens=500)[0].tolist()))
+for _ in range(10):
+    context = torch.zeros((1, 1), dtype=torch.long, device=device)
+    context[0] = encode('>')[0]
+    print(decode(model.generate(context, max_new_tokens=max_length)[0].tolist()))
+
+print('saving model...')
+torch.save(model.state_dict(), 'data/model.pt')
+print('done')
