@@ -68,7 +68,7 @@ block_size = 1 + max_length
 def encode(string, for_training=True, batch_size=1):
     string = '>' + string
     if for_training:
-        string = string + ('~' * (1 + max_length - len(string)))
+        string = string + ('~' * (2 + max_length - len(string)))
     ints = [stoi[c] for c in string]
     if for_training and len(ints) < max_length:
         ints = ints + ([0] * (max_length - len(ints)))
